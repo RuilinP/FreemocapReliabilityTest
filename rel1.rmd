@@ -2,7 +2,11 @@
 title: "reliability1"
 author: "Ruilin Peng"
 date: "2025-12-10"
-output: word_document
+output:
+  html_document:
+    df_print: paged
+  word_document: default
+  pdf_document: default
 ---
 
 ```{r setup, include=FALSE}
@@ -323,4 +327,66 @@ ggplot(df_smooth, aes(time, a_mag_g)) +
   geom_line(color="red") + 
   ggtitle("Left Foot acceleration magnitude in g(smooth, outlier removed for g greater than 15g, absolute time)")
 ```
-# 
+# Sliding window corr computation
+
+```{r}
+setDT(dt1_5min)
+setDT(dt2_5min)
+setDT(dt3_5min)
+setDT(df_smooth)
+
+dt1_5min[, time := as.POSIXct(time, tz = "UTC")]
+dt2_5min[, time := as.POSIXct(time, tz = "UTC")]
+dt3_5min[, time := as.POSIXct(time, tz = "UTC")]
+df_smooth[, time := as.POSIXct(time, tz = "UTC")]
+
+```
+
+```{r}
+# ActiGraph -> 1 Hz
+ag1_1s <- dt1_5min[
+  , .(ag_mag = mean(a_mag_g, na.rm = TRUE)),
+  by = .(sec = as.POSIXct(floor(as.numeric(time)), origin="1970-01-01", tz="UTC"))
+]
+ag2_1s <- dt2_5min[
+  , .(ag_mag = mean(a_mag_g, na.rm = TRUE)),
+  by = .(sec = as.POSIXct(floor(as.numeric(time)), origin="1970-01-01", tz="UTC"))
+]
+ag3_1s <- dt3_5min[
+  , .(ag_mag = mean(a_mag_g, na.rm = TRUE)),
+  by = .(sec = as.POSIXct(floor(as.numeric(time)), origin="1970-01-01", tz="UTC"))
+]
+
+# MoCap accel -> 1 Hz
+mocap_1s <- df_smooth[
+  , .(mocap_mag = mean(a_mag_g, na.rm = TRUE)),
+  by = .(sec = as.POSIXct(floor(as.numeric(time)), origin="1970-01-01", tz="UTC"))
+]
+
+```
+
+
+```{r}
+win_1s <- merge(ag1_1s, mocap_1s, by = "sec", all = FALSE)
+win_2s <- merge(ag2_1s, mocap_1s, by = "sec", all = FALSE)
+win_3s <- merge(ag3_1s, mocap_1s, by = "sec", all = FALSE)
+
+```
+
+```{r}
+cor_overall <- cor(win_1s$ag_mag, win_1s$mocap_mag, use = "complete.obs")
+cor_overall
+```
+
+```{r}
+cor_overall <- cor(win_2s$ag_mag, win_1s$mocap_mag, use = "complete.obs")
+cor_overall
+
+```
+
+```{r}
+cor_overall <- cor(win_1s$ag_mag, win_3s$mocap_mag, use = "complete.obs")
+cor_overall
+
+```
+
