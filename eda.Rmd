@@ -1,0 +1,277 @@
+---
+title: "ReliabilityTest"
+author: "Ruilin Peng"
+date: "2025-12-10"
+output: pdt_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(read.gt3x)
+library(data.table)
+```
+
+1. Load actigraph data
+
+```{r}
+gt3x_path1 <- "data/MOS2E48230454 (2025-12-04).gt3x"
+gt3x_path2 <- "data/MOS2E48230491 (2025-12-04).gt3x"
+gt3x_path3 <- "data/MOS2E48230815 (2025-12-04).gt3x"
+
+g1 <- read.gt3x(gt3x_path1, asDataFrame = TRUE, imputeZeroes = TRUE)
+g2 <- read.gt3x(gt3x_path2, asDataFrame = TRUE, imputeZeroes = TRUE)
+g3 <- read.gt3x(gt3x_path3, asDataFrame = TRUE, imputeZeroes = TRUE)
+dt1 <- as.data.table(g1)
+dt2 <- as.data.table(g2)
+dt3 <- as.data.table(g3)
+```
+
+```{r}
+fwrite(dt1, "acc_raw_xyz_g1.csv")
+fwrite(dt2, "acc_raw_xyz_g2.csv")
+fwrite(dt3, "acc_raw_xyz_g3.csv")
+```
+
+2. Filter the time interval for the actual exercise
+
+```{r}
+
+
+# 1) Define the time window
+start_time <- as.POSIXct("2025-12-04 15:41:06", tz = "UTC")
+end_time   <- start_time + 5*60 + 8   # 10 minutes later
+
+# 2) Make sure 'time' is POSIXct
+dt_list <- list(dt1, dt2, dt3)
+for (i in seq_along(dt_list)) {
+  dt_list[[i]][, time := as.POSIXct(time, tz = "UTC")]
+}
+
+dt1 <- dt_list[[1]]
+dt2 <- dt_list[[2]]
+dt3 <- dt_list[[3]]
+
+# 3A) Keep ONLY that 10-minute window:
+dt1_5min <- dt1[time >= start_time & time <= end_time]
+dt2_5min <- dt2[time >= start_time & time <= end_time]
+dt3_5min <- dt3[time >= start_time & time <= end_time]
+
+# (alternative)
+# 3B) OR, if you meant "drop the first 10 minutes and keep everything AFTER":
+# dt1_trim <- dt1[time >= start_time + 10*60]
+# dt2_trim <- dt2[time >= start_time + 10*60]
+# dt3_trim <- dt3[time >= start_time + 10*60]
+
+```
+
+```{r}
+# Put them in a list to treat all three the same way
+dt5_list <- list(dt1_5min, dt2_5min, dt3_5min)
+
+for (i in seq_along(dt5_list)) {
+  dt5_list[[i]][,
+    `:=`(
+      # Euclidean magnitude (classic vector length)
+      mag_euclid_g = sqrt(X^2 + Y^2 + Z^2),
+
+      # Sum of absolutes (what the tennis paper used)
+      mag_sumabs_g = abs(X) + abs(Y) + abs(Z)
+    )
+  ]
+}
+
+dt1_5min <- dt5_list[[1]]
+dt2_5min <- dt5_list[[2]]
+dt3_5min <- dt5_list[[3]]
+```
+
+
+3. Load mocap
+
+```{r}
+df <- fread("data/recording_15_41_06_gmt+8_by_trajectory.csv")
+
+cols_keep <- c(
+  "timestamp",
+  "com_left_foot_x", "com_left_foot_y", "com_left_foot_z",
+  "body_left_foot_index_x", "body_left_foot_index_y", "body_left_foot_index_z"
+)
+
+df <- df[, ..cols_keep]
+```
+
+
+```{r}
+df_com <- df[, .(
+  timestamp,
+  x = com_left_foot_x,
+  y = com_left_foot_y,
+  z = com_left_foot_z
+)]
+
+```
+
+```{r}
+df_body <- df[, .(
+  timestamp,
+  x = body_left_foot_index_x,
+  y = body_left_foot_index_y,
+  z = body_left_foot_index_z
+)]
+
+```
+
+```{r}
+compute_accel <- function(df) {
+  # sort by timestamp just in case
+  setorder(df, timestamp)
+
+  # convert timestamp from nanoseconds to seconds
+  df[, t_sec := timestamp * 1e-9]
+
+  # compute differences
+  df[, dx := c(NA, diff(x))]
+  df[, dy := c(NA, diff(y))]
+  df[, dz := c(NA, diff(z))]
+
+  df[, dt := c(NA, diff(t_sec))]
+
+  # velocity (mm/s)
+  df[, vx := dx / dt]
+  df[, vy := dy / dt]
+  df[, vz := dz / dt]
+
+  # acceleration (mm/s²)
+  df[, ax := c(NA, diff(vx)) / dt]
+  df[, ay := c(NA, diff(vy)) / dt]
+  df[, az := c(NA, diff(vz)) / dt]
+
+  # convert to m/s²
+  df[, ax_ms2 := ax / 1000]
+  df[, ay_ms2 := ay / 1000]
+  df[, az_ms2 := az / 1000]
+
+  # magnitude
+  df[, a_mag_ms2 := sqrt(ax_ms2^2 + ay_ms2^2 + az_ms2^2)]
+
+  # convert to g
+  df[, a_mag_g := a_mag_ms2 / 9.80665]
+
+  return(df)
+}
+
+
+df_com  <- compute_accel(df_com)
+df_body <- compute_accel(df_body)
+
+
+```
+
+
+```{r}
+cor(dt1_5min$mag_euclid_g, df_body$a_mag_g)
+
+```
+
+
+```{r}
+library(data.table)
+
+# assume these exist: df_body, df_com, each has `dt` and `a_mag_g` (acc magnitude)
+setDT(df_body)
+setDT(df_com)
+
+# anchor time: same as your IMU series
+anchor_time <- as.POSIXct("2025-12-04 15:41:06", tz = "UTC")
+
+# helper: build absolute time from dt (sec differences)
+make_time_from_dt <- function(dt_vec, t0) {
+  # replace NA in first row with 0
+  dt_clean <- ifelse(is.na(dt_vec), 0, dt_vec)
+  t0 + cumsum(dt_clean)
+}
+
+df_body[, time := make_time_from_dt(dt, anchor_time)]
+df_com[,  time := make_time_from_dt(dt, anchor_time)]
+```
+
+
+```{r}
+start_time <- anchor_time
+end_time   <- start_time + 5*60 + 8
+
+df_body_5min <- df_body[time >= start_time & time <= end_time]
+df_com_5min  <- df_com[ time >= start_time & time <= end_time]
+
+```
+
+```{r}
+win_sec <- 1   # window length in seconds
+
+# helper: add a window index column based on time
+add_window_index <- function(dt, start_time, win_sec) {
+  dt[, win := floor(as.numeric(time - start_time) / win_sec)]
+  dt
+}
+
+dt1_5min  <- add_window_index(dt1_5min,  start_time, win_sec)
+dt2_5min  <- add_window_index(dt2_5min,  start_time, win_sec)
+dt3_5min  <- add_window_index(dt3_5min,  start_time, win_sec)
+df_body_5min <- add_window_index(df_body_5min, start_time, win_sec)
+df_com_5min  <- add_window_index(df_com_5min,  start_time, win_sec)
+
+```
+
+```{r}
+# summarize IMU accelerations
+dt1_win <- dt1_5min[, .(mag = max(mag_euclid_g, na.rm = TRUE)), by = win]
+dt2_win <- dt2_5min[, .(mag = max(mag_euclid_g, na.rm = TRUE)), by = win]
+dt3_win <- dt3_5min[, .(mag = max(mag_euclid_g, na.rm = TRUE)), by = win]
+
+# summarize body/com accelerations
+body_win <- df_body_5min[, .(mag = max(a_mag_g, na.rm = TRUE)), by = win]
+com_win  <- df_com_5min[,  .(mag = max(a_mag_g, na.rm = TRUE)), by = win]
+
+setnames(dt1_win, "mag", "mag_dt1")
+setnames(dt2_win, "mag", "mag_dt2")
+setnames(dt3_win, "mag", "mag_dt3")
+setnames(body_win, "mag", "mag_body")
+setnames(com_win,  "mag", "mag_com")
+
+```
+
+```{r}
+# combine everything by window
+win_all <- Reduce(
+  f = function(x, y) merge(x, y, by = "win", all = FALSE),
+  x = list(dt1_win, dt2_win, dt3_win, body_win, com_win)
+)
+
+# check structure
+str(win_all)
+```
+
+```{r}
+corr_dt1_body <- cor(win_all$mag_dt1, win_all$mag_body, use = "complete.obs")
+corr_dt1_com  <- cor(win_all$mag_dt1, win_all$mag_com,  use = "complete.obs")
+
+corr_dt2_body <- cor(win_all$mag_dt2, win_all$mag_body, use = "complete.obs")
+corr_dt2_com  <- cor(win_all$mag_dt2, win_all$mag_com,  use = "complete.obs")
+
+corr_dt3_body <- cor(win_all$mag_dt3, win_all$mag_body, use = "complete.obs")
+corr_dt3_com  <- cor(win_all$mag_dt3, win_all$mag_com,  use = "complete.obs")
+
+c(
+  dt1_body = corr_dt1_body,
+  dt1_com  = corr_dt1_com,
+  dt2_body = corr_dt2_body,
+  dt2_com  = corr_dt2_com,
+  dt3_body = corr_dt3_body,
+  dt3_com  = corr_dt3_com
+)
+
+```
+
