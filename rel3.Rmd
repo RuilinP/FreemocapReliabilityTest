@@ -1,0 +1,251 @@
+---
+title: "rel3"
+author: "Ruilin Peng"
+date: "2025-12-15"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load data from actigraph
+```{r}
+library(read.gt3x)
+library(data.table)
+gt3x_path1 <- "data/MOS2E48230454 (2025-12-04).gt3x"
+gt3x_path2 <- "data/MOS2E48230491 (2025-12-04).gt3x"
+gt3x_path3 <- "data/MOS2E48230815 (2025-12-04).gt3x"
+
+lf <- read.gt3x(gt3x_path1, asDataFrame = TRUE, imputeZeroes = TRUE)
+rf <- read.gt3x(gt3x_path2, asDataFrame = TRUE, imputeZeroes = TRUE)
+rh <- read.gt3x(gt3x_path3, asDataFrame = TRUE, imputeZeroes = TRUE)
+lf_df <- as.data.table(lf)
+rf_df <- as.data.table(rf)
+rh_df <- as.data.table(rh)
+
+#lf_df[, Y := Y + 1]
+```
+
+```{r}
+
+# 1) Define the time window
+start_time <- as.POSIXct("2025-12-04 15:41:06", tz = "UTC")
+end_time   <- start_time + 5*60 + 8   # 10 minutes later
+
+# 2) Make sure 'time' is POSIXct
+dt_list <- list(lf_df, rf_df, rh_df)
+for (i in seq_along(dt_list)) {
+  dt_list[[i]][, time := as.POSIXct(time, tz = "UTC")]
+}
+
+lf_df <- dt_list[[1]]
+rf_df <- dt_list[[2]]
+rh_df <- dt_list[[3]]
+
+# 3A) Keep ONLY that 10-minute window:
+lf_df_5min <- lf_df[time >= start_time & time <= end_time]
+rf_df_5min <- rf_df[time >= start_time & time <= end_time]
+rh_df_5min <- rh_df[time >= start_time & time <= end_time]
+
+
+```
+Manually filter the interval
+```{r}
+# Put them in a list to treat all three the same way
+dt5_list <- list(lf_df_5min, rf_df_5min, rh_df_5min)
+
+for (i in seq_along(dt5_list)) {
+  dt5_list[[i]][,
+    `:=`(
+      # Euclidean magnitude (classic vector length)
+      a_mag_g = sqrt(X^2 + Y^2 + Z^2),
+
+      # Sum of absolutes (what the tennis paper used)
+      mag_sumabs_g = abs(X) + abs(Y) + abs(Z)
+    )
+  ]
+}
+
+lf_df_5min <- dt5_list[[1]]
+rf_df_5min <- dt5_list[[2]]
+rh_df_5min <- dt5_list[[3]]
+```
+
+
+```{r}
+fwrite(lf_df_5min, "acc_5min_xyz_g_lf.csv")
+fwrite(rf_df_5min, "acc_5min_xyz_g_rf.csv")
+fwrite(rh_df_5min, "acc_5min_xyz_g_rh.csv")
+```
+output to csv
+
+```{r}
+library(ggplot2)
+ggplot(lf_df_5min, aes(time, a_mag_g)) +
+  geom_line(color="red") + 
+  ggtitle("Actigraph 1 acceleration magnitude in g")
+
+ggplot(rf_df_5min, aes(time, a_mag_g)) +
+  geom_line(color="blue") + 
+  ggtitle("Actigraph 2 acceleration magnitude in g")
+
+ggplot(rh_df_5min, aes(time, a_mag_g)) +
+  geom_line(color="green") + 
+  ggtitle("Actigraph 3 acceleration magnitude in g")
+```
+
+
+# Data Loading from freemocap regarding left foot
+```{r}
+library(read.gt3x)
+library(data.table)
+
+df <- fread("data/recording_15_41_06_gmt+8_by_trajectory.csv")
+
+cols_keep <- c(
+  "timestamp",
+  "body_left_foot_index_x", "body_left_foot_index_y", "body_left_foot_index_z"
+)
+
+df <- df[, ..cols_keep]
+```
+
+```{r}
+df[, t := (timestamp - timestamp[1]) / 1e9] 
+```
+
+
+```{r}
+setDT(df)
+# anchor time: same as your IMU series
+anchor_time <- as.POSIXct("2025-12-04 15:41:06", tz = "UTC")
+# helper: build absolute time from dt (sec differences)
+make_time_from_dt <- function(dt_vec, t0) {
+  # replace NA in first row with 0
+  dt_clean <- ifelse(is.na(dt_vec), 0, dt_vec)
+  t0 + dt_clean
+}
+df[, time := make_time_from_dt(t, anchor_time)]
+```
+
+```{r}
+ggplot(df, aes(time, body_left_foot_index_x)) +
+  geom_line(color="red") + 
+  ggtitle("Freemocap x coordinate")
+
+ggplot(df, aes(time, body_left_foot_index_y)) +
+  geom_line(color="green") + 
+  ggtitle("Freemocap y coordinate")
+
+ggplot(df, aes(time, body_left_foot_index_z)) +
+  geom_line(color="blue") + 
+  ggtitle("Freemocap z coordinate")
+```
+```{r}
+remove_outliers_mad <- function(x, k = 6) {
+  med  <- median(x, na.rm = TRUE)
+  madv <- mad(x, constant = 1, na.rm = TRUE)
+  dev  <- abs(x - med)
+
+  x[dev > k*madv] <- NA
+  return(x)
+}
+
+```
+We first assign NA to data points whose deviation is greater than 6 MADs(Median Absolute Deviation) away from the median
+```{r}
+df[, body_left_foot_index_x := remove_outliers_mad(body_left_foot_index_x)]
+df[, body_left_foot_index_y := remove_outliers_mad(body_left_foot_index_y)]
+df[, body_left_foot_index_z := remove_outliers_mad(body_left_foot_index_z)]
+```
+
+```{r}
+library(zoo)
+
+df[, body_left_foot_index_x := na.approx(body_left_foot_index_x, na.rm = FALSE)]
+df[, body_left_foot_index_y := na.approx(body_left_foot_index_y, na.rm = FALSE)]
+df[, body_left_foot_index_z := na.approx(body_left_foot_index_z, na.rm = FALSE)]
+
+```
+Then we incorporate missing values.
+
+# Restrict to common window
+
+```{r}
+t_start <- max(min(lf_df$time), min(df$time))
+t_end   <- min(max(lf_df$time), max(df$time))
+
+lf_df <- lf_df[time >= t_start & time <= t_end]
+df    <- df[time >= t_start & time <= t_end]
+
+```
+
+# Create Unit free temporal signals
+
+```{r}
+lf_df_5min[, imu_sig := a_mag_g]
+lf_df_5min[, imu_sig := scale(imu_sig)]
+```
+
+```{r}
+df[, mocap_sig := sqrt(
+  c(NA, diff(body_left_foot_index_x))^2 +
+  c(NA, diff(body_left_foot_index_y))^2 +
+  c(NA, diff(body_left_foot_index_z))^2
+)]
+
+df[, mocap_sig := scale(mocap_sig)]
+
+```
+
+# Bring to a common time grid
+
+```{r}
+lf_1s <- lf_df_5min[
+  , .(imu_sig = mean(imu_sig, na.rm = TRUE)),
+  by = .(sec = as.POSIXct(floor(as.numeric(time)), origin="1970-01-01"))
+]
+
+mc_1s <- df[
+  , .(mocap_sig = mean(mocap_sig, na.rm = TRUE)),
+  by = .(sec = as.POSIXct(floor(as.numeric(time)), origin="1970-01-01"))
+]
+
+win <- merge(lf_1s, mc_1s, by="sec")
+```
+
+# Lagged cross-correlation
+```{r}
+ccf(
+  win$imu_sig,
+  win$mocap_sig,
+  lag.max = 10,
+  plot = TRUE,
+  na.action = na.omit
+)
+```
+
+# Quantify the result
+
+```{r}
+cc <- ccf(
+  win$imu_sig,
+  win$mocap_sig,
+  lag.max = 10,
+  plot = FALSE,
+  na.action = na.omit
+)
+
+peak_idx <- which.max(abs(cc$acf))
+peak_lag <- cc$lag[peak_idx]
+peak_r   <- cc$acf[peak_idx]
+
+```
+
+```{r}
+peak_idx
+peak_lag
+peak_r
+```
+
