@@ -1,0 +1,119 @@
+---
+title: "testretest"
+author: "Ruilin Peng"
+date: "2025-12-16"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+# Data Loading from freemocap regarding right foot
+```{r}
+library(data.table)
+library(ggplot2)
+
+df <- fread("data/recording_15_41_06_gmt+8_by_trajectory.csv")
+
+cols_keep <- c(
+  "timestamp",
+  "com_right_foot_x", "com_right_foot_y", "com_right_foot_z"
+)
+
+df <- df[, ..cols_keep]
+```
+
+```{r}
+df[, t := (timestamp - timestamp[1]) / 1e9] 
+```
+
+
+```{r}
+setDT(df)
+# anchor time: same as your IMU series
+anchor_time <- as.POSIXct("2025-12-04 15:41:06", tz = "UTC")
+# helper: build absolute time from dt (sec differences)
+make_time_from_dt <- function(dt_vec, t0) {
+  # replace NA in first row with 0
+  dt_clean <- ifelse(is.na(dt_vec), 0, dt_vec)
+  t0 + dt_clean
+}
+df[, time := make_time_from_dt(t, anchor_time)]
+```
+Starting by loading the original freemocap data obtained on the day of experiment.
+```{r}
+ggplot(df, aes(time, com_right_foot_x)) +
+  geom_line(color="red") + 
+  ggtitle("Original Freemocap x coordinate")
+
+ggplot(df, aes(time, com_right_foot_y)) +
+  geom_line(color="green") + 
+  ggtitle("Original Freemocap y coordinate")
+
+ggplot(df, aes(time, com_right_foot_z)) +
+  geom_line(color="blue") + 
+  ggtitle("Original Freemocap z coordinate")
+```
+
+
+
+
+```{r}
+
+df2 <- fread("data/recording_15_41_06_gmt+8_by_trajectory2.csv")
+
+cols_keep <- c(
+  "timestamp",
+  "com_right_foot_x", "com_right_foot_y", "com_right_foot_z"
+)
+
+df2 <- df2[, ..cols_keep]
+```
+
+```{r}
+df2[, t := (timestamp - timestamp[1]) / 1e9] 
+```
+
+
+```{r}
+setDT(df2)
+# anchor time: same as your IMU series
+anchor_time <- as.POSIXct("2025-12-04 15:41:06", tz = "UTC")
+# helper: build absolute time from dt (sec differences)
+make_time_from_dt <- function(dt_vec, t0) {
+  # replace NA in first row with 0
+  dt_clean <- ifelse(is.na(dt_vec), 0, dt_vec)
+  t0 + dt_clean
+}
+df2[, time := make_time_from_dt(t, anchor_time)]
+```
+Then here is the reprocessed data obtained today from the same synchronized videos
+```{r}
+ggplot(df2, aes(time, com_right_foot_x)) +
+  geom_line(color="red") + 
+  ggtitle("Reprocessed Freemocap x coordinate")
+
+ggplot(df2, aes(time, com_right_foot_y)) +
+  geom_line(color="green") + 
+  ggtitle("Reprocessed Freemocap y coordinate")
+
+ggplot(df2, aes(time, com_right_foot_z)) +
+  geom_line(color="blue") + 
+  ggtitle("Reprocessed Freemocap z coordinate")
+```
+
+
+```{r}
+cor(df$com_right_foot_x, df2$com_right_foot_x)
+```
+```{r}
+cor(df$com_right_foot_y, df2$com_right_foot_y)
+```
+
+```{r}
+cor(df$com_right_foot_z, df2$com_right_foot_z)
+```
+Results suggest both orignial and reprocessed data match.
