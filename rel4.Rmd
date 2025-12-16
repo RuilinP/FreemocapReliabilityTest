@@ -292,4 +292,34 @@ abline(lm(y ~ x), lty = 2)
 
 ```
 
+```{r}
+sec_v <- fmc_aligned$sec[valid]
+
+plot(
+  sec_v, x,
+  type = "l",
+  col  = "steelblue",
+  lwd  = 2,
+  xlab = "Time (sec)",
+  ylab = "z-scored acceleration",
+  main = "FreeMoCap vs ActiGraph (aligned, z-scored)"
+)
+
+lines(
+  sec_v, y,
+  col = "firebrick",
+  lwd = 2
+)
+
+legend(
+  "topright",
+  legend = c("FreeMoCap", "ActiGraph"),
+  col    = c("steelblue", "firebrick"),
+  lty    = 1,
+  lwd    = 2,
+  bty    = "n"
+)
+
+```
+
 As final result, lag at 0 is shown to have the peak pearson correlation r=0.434, which is interpreted as moderate positive correlation. 
