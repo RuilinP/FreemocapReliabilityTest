@@ -1,0 +1,283 @@
+---
+title: "rel4"
+author: "Ruilin Peng"
+date: "2025-12-16"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load data from actigraph
+```{r}
+library(read.gt3x)
+library(data.table)
+gt3x_path1 <- "data/MOS2E48230454 (2025-12-04).gt3x"
+gt3x_path2 <- "data/MOS2E48230491 (2025-12-04).gt3x"
+gt3x_path3 <- "data/MOS2E48230815 (2025-12-04).gt3x"
+
+lf <- read.gt3x(gt3x_path1, asDataFrame = TRUE, imputeZeroes = TRUE)
+rf <- read.gt3x(gt3x_path2, asDataFrame = TRUE, imputeZeroes = TRUE)
+rh <- read.gt3x(gt3x_path3, asDataFrame = TRUE, imputeZeroes = TRUE)
+lf_df <- as.data.table(lf)
+rf_df <- as.data.table(rf)
+rh_df <- as.data.table(rh)
+
+```
+
+```{r}
+
+# 1) Define the time window
+start_time <- as.POSIXct("2025-12-04 15:41:06", tz = "UTC")
+end_time   <- start_time + 5*60 + 8   # 10 minutes later
+
+# 2) Make sure 'time' is POSIXct
+dt_list <- list(lf_df, rf_df, rh_df)
+for (i in seq_along(dt_list)) {
+  dt_list[[i]][, time := as.POSIXct(time, tz = "UTC")]
+}
+
+lf_df <- dt_list[[1]]
+rf_df <- dt_list[[2]]
+rh_df <- dt_list[[3]]
+
+# 3A) Keep ONLY that 10-minute window:
+lf_df_5min <- lf_df[time >= start_time & time <= end_time]
+rf_df_5min <- rf_df[time >= start_time & time <= end_time]
+rh_df_5min <- rh_df[time >= start_time & time <= end_time]
+
+
+```
+Manually filter the interval
+```{r}
+# Put them in a list to treat all three the same way
+dt5_list <- list(lf_df_5min, rf_df_5min, rh_df_5min)
+
+for (i in seq_along(dt5_list)) {
+  dt5_list[[i]][,
+    `:=`(
+      # Euclidean magnitude (classic vector length)
+      a_mag_g = sqrt(X^2 + Y^2 + Z^2),
+
+      # Sum of absolutes (what the tennis paper used)
+      mag_sumabs_g = abs(X) + abs(Y) + abs(Z)
+    )
+  ]
+}
+
+lf_df_5min <- dt5_list[[1]]
+rf_df_5min <- dt5_list[[2]]
+rh_df_5min <- dt5_list[[3]]
+```
+
+
+```{r}
+lf_df_5min[ a_mag_g < 0.5 | a_mag_g > 3, a_mag_g := NA ]
+rf_df_5min[ a_mag_g < 0.5 | a_mag_g > 3, a_mag_g := NA ]
+rh_df_5min[ a_mag_g < 0.5 | a_mag_g > 3, a_mag_g := NA ]
+
+library(ggplot2)
+ggplot(lf_df_5min, aes(time, a_mag_g)) +
+  geom_line(color="red") + 
+  ggtitle("Actigraph 1 acceleration magnitude in g")
+
+ggplot(rf_df_5min, aes(time, a_mag_g)) +
+  geom_line(color="blue") + 
+  ggtitle("Actigraph 2 acceleration magnitude in g")
+
+ggplot(rh_df_5min, aes(time, a_mag_g)) +
+  geom_line(color="green") + 
+  ggtitle("Actigraph 3 acceleration magnitude in g")
+```
+
+
+# Data Loading from freemocap regarding right foot
+```{r}
+library(read.gt3x)
+library(data.table)
+
+df <- fread("data/recording_15_41_06_gmt+8_by_trajectory.csv")
+
+cols_keep <- c(
+  "timestamp",
+  "com_right_foot_x", "com_right_foot_y", "com_right_foot_z"
+)
+
+df <- df[, ..cols_keep]
+```
+
+```{r}
+df[, t := (timestamp - timestamp[1]) / 1e9] 
+```
+
+
+```{r}
+setDT(df)
+# anchor time: same as your IMU series
+anchor_time <- as.POSIXct("2025-12-04 15:41:06", tz = "UTC")
+# helper: build absolute time from dt (sec differences)
+make_time_from_dt <- function(dt_vec, t0) {
+  # replace NA in first row with 0
+  dt_clean <- ifelse(is.na(dt_vec), 0, dt_vec)
+  t0 + dt_clean
+}
+df[, time := make_time_from_dt(t, anchor_time)]
+```
+
+```{r}
+ggplot(df, aes(time, com_right_foot_x)) +
+  geom_line(color="red") + 
+  ggtitle("Freemocap x coordinate")
+
+ggplot(df, aes(time, com_right_foot_y)) +
+  geom_line(color="green") + 
+  ggtitle("Freemocap y coordinate")
+
+ggplot(df, aes(time, com_right_foot_z)) +
+  geom_line(color="blue") + 
+  ggtitle("Freemocap z coordinate")
+```
+```{r}
+remove_outliers_mad <- function(x, k = 6) {
+  med  <- median(x, na.rm = TRUE)
+  madv <- mad(x, constant = 1, na.rm = TRUE)
+  dev  <- abs(x - med)
+
+  x[dev > k*madv] <- NA
+  return(x)
+}
+
+```
+We first assign NA to data points whose deviation is greater than 6 MADs(Median Absolute Deviation) away from the median
+```{r}
+df[, com_right_foot_x := remove_outliers_mad(com_right_foot_x)]
+df[, com_right_foot_y := remove_outliers_mad(com_right_foot_y)]
+df[, com_right_foot_z := remove_outliers_mad(com_right_foot_z)]
+```
+
+```{r}
+library(zoo)
+
+df[, com_right_foot_x := na.approx(com_right_foot_x, na.rm = FALSE)]
+df[, com_right_foot_y := na.approx(com_right_foot_y, na.rm = FALSE)]
+df[, com_right_foot_z := na.approx(com_right_foot_z, na.rm = FALSE)]
+
+```
+Then we incorporate missing values.
+
+```{r}
+ggplot(df, aes(time, com_right_foot_x)) +
+  geom_line(color="red") + 
+  ggtitle("Freemocap x coordinate")
+
+ggplot(df, aes(time, com_right_foot_y)) +
+  geom_line(color="green") + 
+  ggtitle("Freemocap y coordinate")
+
+ggplot(df, aes(time, com_right_foot_z)) +
+  geom_line(color="blue") + 
+  ggtitle("Freemocap z coordinate")
+```
+
+
+```{r}
+setDT(df)
+
+# sort by time just in case
+setorder(df, t)
+
+# velocity (m/s)
+df[, `:=`(
+  vx = c(NA, diff(com_right_foot_x) / (1000*diff(t))),
+  vy = c(NA, diff(com_right_foot_y) / (1000*diff(t))),
+  vz = c(NA, diff(com_right_foot_z) / (1000*diff(t)))
+)]
+
+# acceleration (m/s^2)
+df[, `:=`(
+  ax = c(NA, diff(vx) / diff(t)),
+  ay = c(NA, diff(vy) / diff(t)),
+  az = c(NA, diff(vz) / diff(t)) 
+)]
+
+g_const <- 9.81
+
+df[, a_mag_g := sqrt(ax^2 + ay^2 + az^2) / g_const + 1]
+
+
+```
+
+```{r}
+df[
+  a_mag_g < 0.5 |
+  a_mag_g > 3,
+  a_mag_g := NA
+]
+```
+
+```{r}
+ggplot(df, aes(time, a_mag_g)) +
+  geom_line(color="red") + 
+  ggtitle("Freemocap a_mag_g")
+```
+
+# 1 sec window
+
+```{r}
+df[, sec := floor(as.numeric(time))]
+
+fmc_win <- df[
+  , .(a = mean(a_mag_g, na.rm = TRUE)),
+  by = sec
+]
+
+rf_df_5min[, sec := floor(as.numeric(time))]
+
+ag_win <- rf_df_5min[
+  , .(a = mean(a_mag_g, na.rm = TRUE)),
+  by = sec
+]
+
+```
+
+```{r}
+common_sec <- intersect(fmc_win$sec, ag_win$sec)
+
+fmc_aligned <- fmc_win[sec %in% common_sec][order(sec)]
+ag_aligned  <- ag_win[sec %in% common_sec][order(sec)]
+
+valid <- complete.cases(fmc_aligned$a, ag_aligned$a)
+
+x <- fmc_aligned$a[valid]
+y <- ag_aligned$a[valid]
+
+```
+
+```{r}
+x <- as.numeric(scale(x))
+y <- as.numeric(scale(y))
+
+
+cc <- ccf(
+  x,
+  y,
+  lag.max = 10,   # ±10 seconds
+  plot = TRUE
+)
+
+```
+
+```{r}
+peak_idx <- which.max(abs(cc$acf))
+peak_lag <- cc$lag[peak_idx]
+peak_r   <- cc$acf[peak_idx]
+
+```
+
+```{r}
+peak_idx
+peak_lag
+peak_r
+```
+
